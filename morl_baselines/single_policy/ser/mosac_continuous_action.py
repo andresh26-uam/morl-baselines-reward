@@ -277,7 +277,7 @@ class MOSAC(MOPolicy):
     def get_config(self) -> dict:
         """Returns the configuration of the policy."""
         return {
-            "env_id": self.env.unwrapped.spec.id,
+            "env_id": self.env.spec.id,
             "buffer_size": self.buffer_size,
             "gamma": self.gamma,
             "tau": self.tau,

@@ -246,7 +246,7 @@ class GPIPDContinuousAction(MOAgent, MOPolicy):
     def get_config(self):
         """Get the configuration of the agent."""
         return {
-            "env_id": self.env.unwrapped.spec.id,
+            "env_id": self.env.spec.id,
             "learning_rate": self.learning_rate,
             "num_q_nets": self.num_q_nets,
             "batch_size": self.batch_size,
@@ -344,7 +344,7 @@ class GPIPDContinuousAction(MOAgent, MOPolicy):
         batch_size = min(self.dynamics_rollout_batch_size, 10000)
         for _ in range(num_times):
             obs = self.replay_buffer.sample_obs(batch_size, to_tensor=False)
-            model_env = ModelEnv(self.dynamics, self.env.unwrapped.spec.id, rew_dim=self.reward_dim)
+            model_env = ModelEnv(self.dynamics, self.env.spec.id, rew_dim=self.reward_dim)
             for plan_step in range(self.dynamics_rollout_len):
                 obs = th.tensor(obs).to(self.device)
                 w = weight.repeat(obs.shape[0], 1)

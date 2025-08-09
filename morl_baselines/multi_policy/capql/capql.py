@@ -271,7 +271,7 @@ class CAPQL(MOAgent, MOPolicy):
     def get_config(self):
         """Get the configuration of the agent."""
         return {
-            "env_id": self.env.unwrapped.spec.id,
+            "env_id": self.env.spec.id,
             "learning_rate": self.learning_rate,
             "num_q_nets": self.num_q_nets,
             "batch_size": self.batch_size,

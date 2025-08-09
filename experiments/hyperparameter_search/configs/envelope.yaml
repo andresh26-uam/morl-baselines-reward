@@ -3,21 +3,26 @@ metric:
   goal: maximize
   name: avg_hypervolume
 parameters:
+  num_sample_w: 
+    distribution: categorical
+    values: [6, 12, 16, 20]
+  envelope: 
+    value: true
   learning_rate:
     distribution: uniform
     min: 0.0001
     max: 0.001
   initial_epsilon:
     distribution: uniform
-    min: 0.01
-    max: 1
+    min: 0.1
+    max: 0.5
   final_epsilon:
     distribution: uniform
-    min: 0.01
-    max: 1
+    min: 0.00
+    max: 0.05
   epsilon_decay_steps:
     distribution: int_uniform
-    min: 1
+    min: 10000
     max: 100000
   tau:
     distribution: uniform
@@ -25,26 +30,28 @@ parameters:
     max: 1.0
   target_net_update_freq:
     distribution: int_uniform
-    min: 1
+    min: 100
     max: 10000
   buffer_size:
     distribution: int_uniform
     min: 1000
-    max: 2000000
+    max: 10000
   net_arch:
-    value: [256, 256, 256, 256]
+    distribution: categorical
+    values: [[16, 32, 64], [16, 32, 64], [64, 64, 64], [128, 128, 128], [256, 256, 256, 256]]
   batch_size:
-    value: 32
+    distribution: categorical
+    values: [16, 32, 64]
   learning_starts:
     distribution: int_uniform
-    min: 1
-    max: 1000
+    min: 100
+    max: 10000
   gradient_updates:
     distribution: int_uniform
     min: 1
     max: 10
   gamma:
-    value: 0.98
+    value: 0.999
   max_grad_norm:
     distribution: uniform
     min: 0.1
@@ -60,12 +67,16 @@ parameters:
   initial_homotopy_lambda:
     distribution: uniform
     min: 0.0
-    max: 1
+    max: 0.1
   final_homotopy_lambda:
     distribution: uniform
-    min: 0.0
+    min: 0.5
     max: 1
   homotopy_decay_steps:
     distribution: int_uniform
-    min: 1
+    min: 10000
     max: 100000
+train_kwargs:
+  num_eval_weights_for_front: 10
+  num_eval_episodes_for_front:  50
+  total_timesteps: 100000

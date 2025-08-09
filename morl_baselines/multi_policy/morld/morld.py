@@ -219,7 +219,7 @@ class MORLD(MOAgent):
     @override
     def get_config(self) -> dict:
         return {
-            "env_id": self.env.unwrapped.spec.id,
+            "env_id": self.env.spec.id,
             "scalarization_method": self.scalarization_method,
             "evaluation_mode": self.evaluation_mode,
             "gamma": self.gamma,

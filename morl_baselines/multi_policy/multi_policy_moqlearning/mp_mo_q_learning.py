@@ -105,7 +105,7 @@ class MPMOQLearning(MOAgent):
     @override
     def get_config(self) -> dict:
         return {
-            "env_id": self.env.unwrapped.spec.id,
+            "env_id": self.env.spec.id,
             "learning_rate": self.learning_rate,
             "gamma": self.gamma,
             "initial_epsilon": self.initial_epsilon,

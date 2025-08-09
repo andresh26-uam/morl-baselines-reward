@@ -12,10 +12,10 @@ import torch as th
 import wandb
 from mo_gymnasium.wrappers import MORecordEpisodeStatistics
 from torch import nn, optim
-from torch.distributions import Normal
+from torch.distributions import Normal, Categorical
 
 from morl_baselines.common.evaluation import log_episode_info
-from morl_baselines.common.morl_algorithm import MOPolicy
+from morl_baselines.common.morl_algorithm import MOAgent, MOPolicy
 from morl_baselines.common.networks import layer_init, mlp
 
 
@@ -104,7 +104,7 @@ class PPOReplayBuffer:
         )
 
 
-def make_env(env_id, seed, idx, run_name, gamma):
+def make_env(env_id, seed, idx, run_name, gamma, normalize_observations=True):
     """Returns a function to create environments. This is because PPO works better with vectorized environments. Also, some tricks like clipping and normalizing the environments' features are applied.
 
     Args:
@@ -130,8 +130,10 @@ def make_env(env_id, seed, idx, run_name, gamma):
                 f"videos/{run_name}_{seed}",
                 episode_trigger=lambda e: e % 1000 == 0,
             ) """
-        env = gym.wrappers.ClipAction(env)
-        env = gym.wrappers.NormalizeObservation(env)
+        if isinstance(env.action_space, gym.spaces.Box):
+            env = gym.wrappers.ClipAction(env)
+        if normalize_observations:
+            env = gym.wrappers.NormalizeObservation(env)
         env = gym.wrappers.TransformObservation(env, lambda obs: np.clip(obs, -10, 10), env.observation_space)
         for o in range(reward_dim):
             env = mo_gym.wrappers.MONormalizeReward(env, idx=o, gamma=gamma)
@@ -211,28 +213,49 @@ class MOPPONet(nn.Module):
         Returns: The predicted value of the observation.
         """
         return self.critic(obs)
+    @property
+    def continuous_action(self):
+        return not (len(self.action_shape) == 1 and self.action_shape[0] > 2) # TODO?
 
     def get_action_and_value(self, obs, action=None):
-        """Get the action and value of an observation.
+        ca = self.continuous_action
+        if ca:
+            """Get the action and value of an observation.
 
-        Args:
-            obs: Observation
-            action: Action. If None, a new action is sampled.
+            Args:
+                obs: Observation
+                action: Action. If None, a new action is sampled.
 
-        Returns: A tuple of (action, logprob, entropy, value)
-        """
-        action_mean = self.actor_mean(obs)
-        action_logstd = self.actor_logstd.expand_as(action_mean)
-        action_std = th.exp(action_logstd)
-        probs = Normal(action_mean, action_std)
+            Returns: A tuple of (action, logprob, entropy, value)
+            """
+            action_mean = self.actor_mean(obs)
+            action_logstd = self.actor_logstd.expand_as(action_mean)
+            action_std = th.exp(action_logstd)
+            probs = Normal(action_mean, action_std)
+            
+
+        else:
+            logits = self.actor_mean(obs)
+            probs = Categorical(logits=logits)
+        
         if action is None:
-            action = probs.sample()
-        return (
+                action = probs.sample()
+        if ca:
+            return (
             action,
             probs.log_prob(action).sum(1),
             probs.entropy().sum(1),
             self.critic(obs),
         )
+        else:
+            return (
+                action,
+                probs.log_prob(action),
+                probs.entropy(),
+                self.critic(obs)
+            )
+
+
 
 
 class MOPPO(MOPolicy):
@@ -299,7 +322,6 @@ class MOPPO(MOPolicy):
         self.envs = envs
         self.num_envs = envs.num_envs
         self.networks = networks
-        self.device = device
         self.seed = seed
         if rng is not None:
             self.np_random = rng

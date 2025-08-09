@@ -17,6 +17,7 @@ from morl_baselines.common.experiments import (
 )
 from morl_baselines.common.utils import reset_wandb_env
 
+from baraacuda.envs import living_room
 
 @dataclass
 class WorkerInitData:
@@ -137,36 +138,37 @@ def train(worker_data: WorkerInitData) -> WorkerDoneData:
 
 
 def main():
-    # Get the sweep id
-    sweep_run = wandb.init()
+    if __name__ == "__main__":
+        # Get the sweep id
+        sweep_run = wandb.init()
 
-    # Spin up workers before calling wandb.init()
-    # Workers will be blocked on a queue waiting to start
-    with ProcessPoolExecutor(max_workers=args.num_seeds) as executor:
-        futures = []
-        for num in range(args.num_seeds):
-            # print("Spinning up worker {}".format(num))
-            seed = seeds[num]
-            futures.append(
-                executor.submit(
-                    train, WorkerInitData(sweep_id=sweep_id, seed=seed, config=dict(sweep_run.config), worker_num=num)
+        # Spin up workers before calling wandb.init()
+        # Workers will be blocked on a queue waiting to start
+        with ProcessPoolExecutor(max_workers=args.num_seeds) as executor:
+            futures = []
+            for num in range(args.num_seeds):
+                # print("Spinning up worker {}".format(num))
+                seed = seeds[num]
+                futures.append(
+                    executor.submit(
+                        train, WorkerInitData(sweep_id=sweep_id, seed=seed, config=dict(sweep_run.config), worker_num=num)
+                    )
                 )
-            )
 
-        # Get results from workers
-        results = [future.result() for future in futures]
+            # Get results from workers
+            results = [future.result() for future in futures]
 
-    # Get the hypervolume from the results
-    hypervolume_metrics = [result.hypervolume for result in results]
-    print(f"Hypervolumes of the sweep {sweep_id}: {hypervolume_metrics}")
+        # Get the hypervolume from the results
+        hypervolume_metrics = [result.hypervolume for result in results]
+        print(f"Hypervolumes of the sweep {sweep_id}: {hypervolume_metrics}")
 
-    # Compute the average hypervolume
-    average_hypervolume = sum(hypervolume_metrics) / len(hypervolume_metrics)
-    print(f"Average hypervolume of the sweep {sweep_id}: {average_hypervolume}")
+        # Compute the average hypervolume
+        average_hypervolume = sum(hypervolume_metrics) / len(hypervolume_metrics)
+        print(f"Average hypervolume of the sweep {sweep_id}: {average_hypervolume}")
 
-    # Log the average hypervolume to the sweep run
-    sweep_run.log(dict(avg_hypervolume=average_hypervolume))
-    wandb.finish()
+        # Log the average hypervolume to the sweep run
+        sweep_run.log(dict(avg_hypervolume=average_hypervolume))
+        wandb.finish()
 
 
 args = parse_args()
@@ -179,8 +181,10 @@ config_file = os.path.join(os.path.dirname(__file__), "configs", args.config_nam
 
 # Set up the default hyperparameters
 with open(config_file) as file:
-    sweep_config = yaml.load(file, Loader=yaml.FullLoader)
+    sweep_config: dict = yaml.load(file, Loader=yaml.FullLoader)
 
+args.train_hyperparams.update(sweep_config['train_kwargs'])
+sweep_config.pop('train_kwargs')
 # Set up the sweep
 sweep_id = wandb.sweep(sweep=sweep_config, entity=args.wandb_entity, project=args.project_name)
 

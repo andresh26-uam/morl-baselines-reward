@@ -31,7 +31,7 @@ ALGOS = {
     "pql": PQL,
     "ols": MPMOQLearning,
     "gpi-ls": MPMOQLearning,
-    "morld": MORLD,
+    "morld": MORLD
 }
 
 ENVS_WITH_KNOWN_PARETO_FRONT = [

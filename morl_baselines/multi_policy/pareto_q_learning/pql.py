@@ -110,7 +110,7 @@ class PQL(MOAgent):
             Dict: A dictionary of parameters and values.
         """
         return {
-            "env_id": self.env.unwrapped.spec.id,
+            "env_id": self.env.spec.id,
             "ref_point": list(self.ref_point),
             "gamma": self.gamma,
             "initial_epsilon": self.initial_epsilon,

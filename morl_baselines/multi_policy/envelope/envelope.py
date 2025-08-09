@@ -115,6 +115,7 @@ class Envelope(MOPolicy, MOAgent):
         seed: Optional[int] = None,
         device: Union[th.device, str] = "auto",
         group: Optional[str] = None,
+        masked: bool = False
     ):
         """Envelope Q-learning algorithm.
 
@@ -169,7 +170,7 @@ class Envelope(MOPolicy, MOAgent):
         self.initial_homotopy_lambda = initial_homotopy_lambda
         self.final_homotopy_lambda = final_homotopy_lambda
         self.homotopy_decay_steps = homotopy_decay_steps
-
+        self.masked = masked
         self.q_net = QNet(self.observation_shape, self.action_dim, self.reward_dim, net_arch=net_arch).to(self.device)
         self.target_q_net = QNet(self.observation_shape, self.action_dim, self.reward_dim, net_arch=net_arch).to(self.device)
         self.target_q_net.load_state_dict(self.q_net.state_dict())
@@ -205,7 +206,7 @@ class Envelope(MOPolicy, MOAgent):
     @override
     def get_config(self):
         return {
-            "env_id": self.env.unwrapped.spec.id,
+            "env_id": self.env.spec.id,
             "learning_rate": self.learning_rate,
             "initial_epsilon": self.initial_epsilon,
             "epsilon_decay_steps": self.epsilon_decay_steps,
@@ -379,9 +380,13 @@ class Envelope(MOPolicy, MOAgent):
     def eval(self, obs: np.ndarray, w: np.ndarray) -> int:
         obs = th.as_tensor(obs).float().to(self.device)
         w = th.as_tensor(w).float().to(self.device)
-        return self.max_action(obs, w)
+        if self.masked:
+            assert obs.shape[0] >= self.action_dim 
+            assert len(obs.shape) == 1
+            action_mask = obs[0:self.action_dim]
+        return self.max_action(obs, w, action_mask=action_mask if self.masked else None)
 
-    def act(self, obs: th.Tensor, w: th.Tensor) -> int:
+    def act(self, obs: th.Tensor, w: th.Tensor, action_mask=None) -> int:
         """Epsilon-greedily select an action given an observation and weight.
 
         Args:
@@ -390,13 +395,19 @@ class Envelope(MOPolicy, MOAgent):
 
         Returns: an integer representing the action to take.
         """
-        if self.np_random.random() < self.epsilon:
-            return self.env.action_space.sample()
+        if not self.masked:
+            if self.np_random.random() < self.epsilon:
+                return self.env.action_space.sample()
+            else:
+                return self.max_action(obs, w)
         else:
-            return self.max_action(obs, w)
+            if self.np_random.random() < self.epsilon:
+                return int(np.random.choice(np.where(action_mask > 0.0)[0]))
+            else:
+                return self.max_action(obs, w, action_mask)
 
     @th.no_grad()
-    def max_action(self, obs: th.Tensor, w: th.Tensor) -> int:
+    def max_action(self, obs: th.Tensor, w: th.Tensor, action_mask: th.Tensor=None) -> int:
         """Select the action with the highest Q-value given an observation and weight.
 
         Args:
@@ -407,8 +418,16 @@ class Envelope(MOPolicy, MOAgent):
         """
         q_values = self.q_net(obs, w)
         scalarized_q_values = th.einsum("r,bar->ba", w, q_values)
-        max_act = th.argmax(scalarized_q_values, dim=1)
-        return max_act.detach().item()
+        if self.masked:
+            action_mask = obs[..., 0:self.action_dim].reshape_as(scalarized_q_values)
+            # Set invalid actions to a very low value so they are never selected
+            masked_q_values = scalarized_q_values.clone()
+            masked_q_values[action_mask <= 0.0] = float('-inf')
+            max_act = th.argmax(masked_q_values, dim=1).detach().item()
+            assert all(action_mask[...,max_act] > 0.0), "Action mask is not valid for the selected action."
+        else:
+            max_act = th.argmax(scalarized_q_values, dim=1).detach().item()
+        return max_act
 
     @th.no_grad()
     def envelope_target(self, obs: th.Tensor, w: th.Tensor, sampled_w: th.Tensor) -> th.Tensor:
@@ -530,19 +549,28 @@ class Envelope(MOPolicy, MOAgent):
 
         num_episodes = 0
         eval_weights = equally_spaced_weights(self.reward_dim, n=num_eval_weights_for_front)
-        obs, _ = self.env.reset()
+        obs, info = self.env.reset()
 
         w = weight if weight is not None else random_weights(self.reward_dim, 1, dist="gaussian", rng=self.np_random)
         tensor_w = th.tensor(w).float().to(self.device)
 
         for _ in range(1, total_timesteps + 1):
+            action_mask = info.get('action_masks', None)
+            if action_mask is not None:
+                action_mask = th.as_tensor(action_mask).float().to(self.device)
+            if verbose:
+                print(f"Global step: {self.global_step}, Episode: {num_episodes}, Epsilon: {self.epsilon:.3f}, Homotopy Lambda: {self.homotopy_lambda:.3f}", flush=True)
             if total_episodes is not None and num_episodes == total_episodes:
                 break
 
             if self.global_step < self.learning_starts:
-                action = self.env.action_space.sample()
+                if action_mask is not None:
+                    action = self.env.action_space.sample()
+                else:
+                    int(np.random.choice(np.where(action_mask > 0.0)[0]))
+                
             else:
-                action = self.act(th.as_tensor(obs).float().to(self.device), tensor_w)
+                action = self.act(th.as_tensor(obs).float().to(self.device), tensor_w, action_mask=action_mask)
 
             next_obs, vec_reward, terminated, truncated, info = self.env.step(action)
             self.global_step += 1
@@ -550,6 +578,7 @@ class Envelope(MOPolicy, MOAgent):
             self.replay_buffer.add(obs, action, vec_reward, next_obs, terminated)
             if self.global_step >= self.learning_starts:
                 self.update()
+            
 
             if eval_env is not None and self.log and self.global_step % eval_freq == 0:
                 current_front = [

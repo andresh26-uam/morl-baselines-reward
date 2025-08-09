@@ -276,7 +276,7 @@ class GPIPD(MOPolicy, MOAgent):
     def get_config(self):
         """Return the configuration of the agent."""
         return {
-            "env_id": self.env.unwrapped.spec.id,
+            "env_id": self.env.spec.id,
             "learning_rate": self.learning_rate,
             "initial_epsilon": self.initial_epsilon,
             "epsilon_decay_steps:": self.epsilon_decay_steps,
@@ -375,7 +375,7 @@ class GPIPD(MOPolicy, MOAgent):
         num_added_imagined_transitions = 0
         for iteration in range(num_times):
             obs = self.replay_buffer.sample_obs(batch_size, to_tensor=False)
-            model_env = ModelEnv(self.dynamics, self.env.unwrapped.spec.id, rew_dim=len(w))
+            model_env = ModelEnv(self.dynamics, self.env.spec.id, rew_dim=len(w))
 
             for h in range(self.dynamics_rollout_len):
                 obs = th.tensor(obs).to(self.device)

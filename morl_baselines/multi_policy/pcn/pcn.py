@@ -188,7 +188,7 @@ class PCN(MOAgent, MOPolicy):
     def get_config(self) -> dict:
         """Get configuration of PCN model."""
         return {
-            "env_id": self.env.unwrapped.spec.id,
+            "env_id": self.env.spec.id, # Why was unwrapped here... ???
             "batch_size": self.batch_size,
             "gamma": self.gamma,
             "learning_rate": self.learning_rate,

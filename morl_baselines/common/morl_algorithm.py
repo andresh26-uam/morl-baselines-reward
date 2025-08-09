@@ -223,7 +223,14 @@ class MOPolicy(ABC):
 
 class MOAgent(ABC):
     """An MORL Agent, can contain one or multiple MOPolicies. Contains helpers to extract features from the environment, setup logging etc."""
+    def set_env(self, env: Optional[gym.Env]) -> None:
+        """Sets the environment for the agent.
 
+        Args:
+            env: The environment to set
+        """
+        self.extract_env_info(env)
+        
     def __init__(
         self,
         env: Optional[gym.Env],
@@ -307,7 +314,7 @@ class MOAgent(ABC):
             None
         """
         self.experiment_name = experiment_name
-        env_id = self.env.spec.id if not isinstance(self.env, MOSyncVectorEnv) else self.env.envs[0].spec.id
+        env_id = self.env.get_wrapper_attr('spec').id if not isinstance(self.env, MOSyncVectorEnv) else self.env.envs[0].spec.id
         self.full_experiment_name = f"{env_id}__{experiment_name}__{self.seed}__{int(time.time())}"
         import wandb
 
