@@ -1,6 +1,7 @@
 """Envelope Q-Learning implementation."""
 
 import os
+import pprint
 from typing import List, Optional, Union
 from typing_extensions import override
 
@@ -29,11 +30,42 @@ from morl_baselines.common.prioritized_buffer import PrioritizedReplayBuffer
 from morl_baselines.common.utils import linearly_decaying_value
 from morl_baselines.common.weights import equally_spaced_weights, random_weights
 
+def negatedActivation(activation):
+    """Negated activation function."""
+    old_forward = activation.forward
+    def negated_forward(*args, **kwds):
+        return -old_forward(*args, **kwds)
+    activation.forward = negated_forward
+    return activation
+
+
+def parse_activation(activation):
+    if activation is None:
+        return nn.ReLU
+    if isinstance(activation, str):
+        if  "relu" in activation.lower():
+            activation_r = nn.ReLU
+        elif "leaky_relu" in activation.lower():
+            activation_r = nn.LeakyReLU
+        elif "tanh" in activation.lower():
+            activation_r = nn.Tanh
+        elif "sigmoid" in activation.lower():
+            activation_r = nn.Sigmoid
+        else:
+            raise ValueError(f"Unknown activation function: {activation}")
+        
+        if '-' in str(activation):
+            return negatedActivation(activation_r)
+        else:
+            return activation_r
+    else:
+        raise ValueError(f"Invalid activation type: {type(activation)}")
+
 
 class QNet(nn.Module):
     """Multi-objective Q-Network conditioned on the weight vector."""
 
-    def __init__(self, obs_shape, action_dim, rew_dim, net_arch):
+    def __init__(self, obs_shape, action_dim, rew_dim, net_arch, activation=None):
         """Initialize the Q network.
 
         Args:
@@ -53,7 +85,7 @@ class QNet(nn.Module):
             self.feature_extractor = NatureCNN(self.obs_shape, features_dim=512)
             input_dim = self.feature_extractor.features_dim + rew_dim
         # |S| + |R| -> ... -> |A| * |R|
-        self.net = mlp(input_dim, action_dim * rew_dim, net_arch)
+        self.net = mlp(input_dim, action_dim * rew_dim, net_arch, activation_fn= parse_activation(activation))
         self.apply(layer_init)
 
     def forward(self, obs, w):
@@ -114,6 +146,7 @@ class Envelope(MOPolicy, MOAgent):
         log: bool = True,
         seed: Optional[int] = None,
         device: Union[th.device, str] = "auto",
+        activation: Optional[Union[str, nn.Module]] = None,
         group: Optional[str] = None,
         masked: bool = False
     ):
@@ -171,8 +204,8 @@ class Envelope(MOPolicy, MOAgent):
         self.final_homotopy_lambda = final_homotopy_lambda
         self.homotopy_decay_steps = homotopy_decay_steps
         self.masked = masked
-        self.q_net = QNet(self.observation_shape, self.action_dim, self.reward_dim, net_arch=net_arch).to(self.device)
-        self.target_q_net = QNet(self.observation_shape, self.action_dim, self.reward_dim, net_arch=net_arch).to(self.device)
+        self.q_net = QNet(self.observation_shape, self.action_dim, self.reward_dim, net_arch=net_arch, activation=activation).to(self.device)
+        self.target_q_net = QNet(self.observation_shape, self.action_dim, self.reward_dim, net_arch=net_arch, activation=activation).to(self.device)
         self.target_q_net.load_state_dict(self.q_net.state_dict())
         for param in self.target_q_net.parameters():
             param.requires_grad = False
@@ -202,6 +235,7 @@ class Envelope(MOPolicy, MOAgent):
         self.log = log
         if log:
             self.setup_wandb(project_name, experiment_name, wandb_entity, group)
+        self.verbose = True
 
     @override
     def get_config(self):
@@ -313,7 +347,6 @@ class Envelope(MOPolicy, MOAgent):
                 b_actions.long().reshape(-1, 1, 1).expand(q_values.size(0), 1, q_values.size(2)),
             )
             q_value = q_value.reshape(-1, self.reward_dim)
-
             critic_loss = F.mse_loss(q_value, target_q)
 
             if self.homotopy_lambda > 0:
@@ -325,6 +358,10 @@ class Envelope(MOPolicy, MOAgent):
             self.q_optim.zero_grad()
             critic_loss.backward()
             if self.log and self.global_step % 100 == 0:
+                pprint.pprint({
+                    "losses/grad_norm": get_grad_norm(self.q_net.parameters()).item(),
+                    "global_step": self.global_step,
+                })
                 wandb.log(
                     {
                         "losses/grad_norm": get_grad_norm(self.q_net.parameters()).item(),
@@ -365,6 +402,13 @@ class Envelope(MOPolicy, MOAgent):
             )
 
         if self.log and self.global_step % 100 == 0:
+            if self.verbose:
+                pprint.pprint({
+                    "losses/critic_loss": np.mean(critic_losses),
+                    "metrics/epsilon": self.epsilon,
+                    "metrics/homotopy_lambda": self.homotopy_lambda,
+                    "global_step": self.global_step,
+                })
             wandb.log(
                 {
                     "losses/critic_loss": np.mean(critic_losses),
@@ -380,13 +424,9 @@ class Envelope(MOPolicy, MOAgent):
     def eval(self, obs: np.ndarray, w: np.ndarray) -> int:
         obs = th.as_tensor(obs).float().to(self.device)
         w = th.as_tensor(w).float().to(self.device)
-        if self.masked:
-            assert obs.shape[0] >= self.action_dim 
-            assert len(obs.shape) == 1
-            action_mask = obs[0:self.action_dim]
-        return self.max_action(obs, w, action_mask=action_mask if self.masked else None)
+        return self.max_action(obs, w)
 
-    def act(self, obs: th.Tensor, w: th.Tensor, action_mask=None) -> int:
+    def act(self, obs: th.Tensor, w: th.Tensor) -> int:
         """Epsilon-greedily select an action given an observation and weight.
 
         Args:
@@ -401,13 +441,15 @@ class Envelope(MOPolicy, MOAgent):
             else:
                 return self.max_action(obs, w)
         else:
+            action_mask = obs[..., 0:self.action_dim].squeeze(-1)
+            assert action_mask.shape == (self.action_dim,)
             if self.np_random.random() < self.epsilon:
                 return int(np.random.choice(np.where(action_mask > 0.0)[0]))
             else:
-                return self.max_action(obs, w, action_mask)
+                return self.max_action(obs, w)
 
     @th.no_grad()
-    def max_action(self, obs: th.Tensor, w: th.Tensor, action_mask: th.Tensor=None) -> int:
+    def max_action(self, obs: th.Tensor, w: th.Tensor) -> int:
         """Select the action with the highest Q-value given an observation and weight.
 
         Args:
@@ -420,6 +462,7 @@ class Envelope(MOPolicy, MOAgent):
         scalarized_q_values = th.einsum("r,bar->ba", w, q_values)
         if self.masked:
             action_mask = obs[..., 0:self.action_dim].reshape_as(scalarized_q_values)
+            assert action_mask.shape == scalarized_q_values.shape
             # Set invalid actions to a very low value so they are never selected
             masked_q_values = scalarized_q_values.clone()
             masked_q_values[action_mask <= 0.0] = float('-inf')
@@ -506,6 +549,7 @@ class Envelope(MOPolicy, MOAgent):
         reset_learning_starts: bool = False,
         verbose: bool = False,
     ):
+        self.verbose = verbose
         """Train the agent.
 
         Args:
@@ -555,22 +599,25 @@ class Envelope(MOPolicy, MOAgent):
         tensor_w = th.tensor(w).float().to(self.device)
 
         for _ in range(1, total_timesteps + 1):
+            
             action_mask = info.get('action_masks', None)
-            if action_mask is not None:
+            if self.masked:
+                assert action_mask is not None
                 action_mask = th.as_tensor(action_mask).float().to(self.device)
-            if verbose:
-                print(f"Global step: {self.global_step}, Episode: {num_episodes}, Epsilon: {self.epsilon:.3f}, Homotopy Lambda: {self.homotopy_lambda:.3f}", flush=True)
+            if self.verbose:
+                pass
+                #print(f"Global step: {self.global_step}, Episode: {num_episodes}, Epsilon: {self.epsilon:.3f}, Homotopy Lambda: {self.homotopy_lambda:.3f}", flush=True)
             if total_episodes is not None and num_episodes == total_episodes:
                 break
 
             if self.global_step < self.learning_starts:
-                if action_mask is not None:
+                if not self.masked:
                     action = self.env.action_space.sample()
                 else:
-                    int(np.random.choice(np.where(action_mask > 0.0)[0]))
+                    action =int(np.random.choice(np.where(action_mask > 0.0)[0]))
                 
             else:
-                action = self.act(th.as_tensor(obs).float().to(self.device), tensor_w, action_mask=action_mask)
+                action = self.act(th.as_tensor(obs).float().to(self.device), tensor_w)
 
             next_obs, vec_reward, terminated, truncated, info = self.env.step(action)
             self.global_step += 1
@@ -593,14 +640,13 @@ class Envelope(MOPolicy, MOAgent):
                     n_sample_weights=num_eval_weights_for_eval,
                     ref_front=known_pareto_front,
                 )
-
             if terminated or truncated:
                 obs, _ = self.env.reset()
                 num_episodes += 1
                 self.num_episodes += 1
 
                 if self.log and "episode" in info.keys():
-                    log_episode_info(info["episode"], np.dot, w, self.global_step, verbose=verbose)
+                    log_episode_info(info["episode"], np.dot, w, self.global_step, verbose=self.verbose)
 
                 if weight is None:
                     w = random_weights(self.reward_dim, 1, dist="gaussian", rng=self.np_random)

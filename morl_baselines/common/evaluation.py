@@ -1,6 +1,7 @@
 """Utilities related to evaluation."""
 
 import os
+import pprint
 import random
 from typing import List, Optional, Tuple
 
@@ -150,6 +151,7 @@ def log_all_multi_policy_metrics(
     global_step: int,
     n_sample_weights: int,
     ref_front: Optional[List[np.ndarray]] = None,
+    verbose=False,
 ):
     """Logs all metrics for multi-policy training.
 
@@ -173,19 +175,24 @@ def log_all_multi_policy_metrics(
     eum = expected_utility(filtered_front, weights_set=equally_spaced_weights(reward_dim, n_sample_weights))
     card = cardinality(filtered_front)
 
-    wandb.log(
-        {
-            "eval/hypervolume": hv,
+    data =  {
+                        "eval/hypervolume": hv,
             "eval/eum": eum,
             "eval/cardinality": card,
             "global_step": global_step,
-        },
+                    }
+    if verbose:
+        pprint.pprint(data)
+    wandb.log(
+        data,
         commit=False,
     )
     front = wandb.Table(
         columns=[f"objective_{i}" for i in range(1, reward_dim + 1)],
         data=[p.tolist() for p in filtered_front],
     )
+    if verbose:
+        pprint.pprint({"eval/front": front})
     wandb.log({"eval/front": front})
 
     # If PF is known, log the additional metrics
@@ -196,6 +203,8 @@ def log_all_multi_policy_metrics(
             reference_set=ref_front,
             weights_set=get_reference_directions("energy", reward_dim, n_sample_weights).astype(np.float32),
         )
+        if verbose:
+            pprint.pprint({"eval/igd": generational_distance, "eval/mul": mul})
         wandb.log({"eval/igd": generational_distance, "eval/mul": mul})
 
 
@@ -239,38 +248,65 @@ def log_episode_info(
     episode_time = info["t"]
     episode_return = info["r"]
     disc_episode_return = info["dr"]
+
+    episode_return_l = info.get("rl", None)
+    disc_episode_return_l = info.get("drl", None)
+
     if weights is None:
         scal_return = scalarization(episode_return)
         disc_scal_return = scalarization(disc_episode_return)
     else:
         scal_return = scalarization(episode_return, weights)
         disc_scal_return = scalarization(disc_episode_return, weights)
+    if episode_return_l is not None:
+            if weights is None:
+                scal_return_l = scalarization(episode_return_l)
+                disc_scal_return_l = scalarization(disc_episode_return_l)
+            else:
+                scal_return_l = scalarization(episode_return_l, weights)
+                disc_scal_return_l = scalarization(disc_episode_return_l, weights)
 
     if verbose:
-        print("Episode infos:")
+        print("Episode infos:", {tuple(f"{float(w):.3f}" for w in weights)})
         print(f"Steps: {episode_ts}, Time: {episode_time}")
         print(f"Total Reward: {episode_return}, Discounted: {disc_episode_return}")
         print(f"Scalarized Reward: {scal_return}, Discounted: {disc_scal_return}")
+        if episode_return_l is not None:
+            print(f"Learned Reward: {episode_return_l}, Discounted: {disc_episode_return_l}")
+            print(f"Scalarized Reward: {scal_return_l}, Discounted: {disc_scal_return_l}")
 
     if id is not None:
         idstr = "_" + str(id)
     else:
         idstr = ""
-    wandb.log(
-        {
+
+    log_base = {
             f"charts{idstr}/timesteps_per_episode": episode_ts,
             f"charts{idstr}/episode_time": episode_time,
             f"metrics{idstr}/scalarized_episode_return": scal_return,
             f"metrics{idstr}/discounted_scalarized_episode_return": disc_scal_return,
             "global_step": global_timestep,
-        },
+        }
+    if episode_return_l is not None:
+        log_base.update({
+            f"metrics{idstr}/scalarized_learned_return": scal_return_l,
+            f"metrics{idstr}/discounted_scalarized_learned_return": disc_scal_return_l,
+        })
+    wandb.log(
+        log_base,
         commit=False,
     )
 
     for i in range(episode_return.shape[0]):
-        wandb.log(
-            {
+        log_base = {
                 f"metrics{idstr}/episode_return_obj_{i}": episode_return[i],
                 f"metrics{idstr}/disc_episode_return_obj_{i}": disc_episode_return[i],
-            },
+            }
+        if episode_return_l is not None:
+            log_base.update({
+                f"metrics{idstr}/episode_return_obj_{i}": episode_return_l[i],
+                f"metrics{idstr}/disc_episode_return_obj_{i}": disc_episode_return_l[i],
+            })
+        wandb.log(
+            log_base
         )
