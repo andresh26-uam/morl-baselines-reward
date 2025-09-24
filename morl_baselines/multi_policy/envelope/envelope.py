@@ -333,12 +333,14 @@ class Envelope(MOPolicy, MOAgent):
                 b_next_obs.repeat(self.num_sample_w, *(1 for _ in range(b_next_obs.dim() - 1))),
                 b_dones.repeat(self.num_sample_w, 1),
             )
-
+            b_next_obs = b_next_obs.float()
+            b_obs = b_obs.float()
+            
             with th.no_grad():
                 if self.envelope:
-                    target = self.envelope_target(b_next_obs, w, sampled_w)
+                    target = self.envelope_target(b_next_obs.float(), w, sampled_w)
                 else:
-                    target = self.ddqn_target(b_next_obs, w)
+                    target = self.ddqn_target(b_next_obs.float(), w)
                 target_q = b_rewards + (1 - b_dones) * self.gamma * target
 
             q_values = self.q_net(b_obs, w)
